@@ -18,9 +18,12 @@ def createBar():
 def getBar(item,win):
     return cv2.getTrackbarPos(item,win)
 
-def intersection(l1,l2):
-    a1,a2 = l1
-    b1,b2 = l2
+def find_intersection(l1,l2):
+    a1 = [l1[0],l1[1]] 
+    a2 = [l1[2],l1[3]]
+
+    b1 = [l2[0],l2[1]] 
+    b2 = [l2[2],l2[3]]
 
     s = np.vstack([a1,a2,b1,b2])
     h = np.hstack((s, np.ones((4, 1)))) 
@@ -31,16 +34,18 @@ def intersection(l1,l2):
         return (False, False)
     return (int(x/z), int(y/z))
 
-def clean_line(lines, degree, gaps=1):
+def clean_line(lines, gaps=1):
     lines = np.array(lines)
     xlines = np.ravel(lines[:,0])
     ylines = np.ravel(lines[:,1])
+
     print("before cleaning :",len(lines))
+
     tmpX = []
     tmpY = []
 
     for i in range(len(xlines)):
-        if degree[i] <= 45:
+        if lines[i,5] <= 45:
             for p in range(len(xlines)):
                 if xlines[i] > xlines[p]:
                     if xlines[i]-gaps < xlines[p]:
@@ -52,7 +57,7 @@ def clean_line(lines, degree, gaps=1):
                             tmpX.append(min([i,p]))
 
     for i in range(len(ylines)):
-        if degree[i] > 45 :
+        if lines[i,5] > 45 :
             for p in range(len(ylines)):
                 if ylines[i] > ylines[p]:
                     if ylines[i]-gaps < ylines[p]:
@@ -68,22 +73,29 @@ def clean_line(lines, degree, gaps=1):
         if (i not in tmpX) and (i not in tmpY):
             ret.append(lines[i])
     print("after cleaning :",len(ret))
-    return ret
+
+    return np.int32(ret)
 
 def draw_line(image, lines):
     for line in lines:
         cv2.line(image,(line[0],line[1]),(line[2],line[3]),(0,255,0),2)
     return image
 
-def find_anomalies(data_):
-    db = DBSCAN(eps=0.05, min_samples=5).fit(data_)
+def draw_circle(image, circles):
+    for circle in circles:
+        cv2.circle(image,(circle[0],circle[1]),2,(0,0,255),2)
+    return image
+
+def find_anomalies(lines):
+    data = normalize(lines[:,4:])
+    db = DBSCAN(eps=0.1, min_samples=3).fit(data)
     labels = db.labels_
 
     anomali_ = []
 
     for i in range(len(labels)):
         if labels[i] != -1:
-            anomali_.append(data_[i])
+            anomali_.append(lines[i])
     n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
     n_noise_ = list(labels).count(-1)
 
@@ -91,8 +103,6 @@ def find_anomalies(data_):
     print('Estimated number of noise points: %d' % n_noise_)
     return anomali_
 #createBar()
-lines = []
-degrees = []
 
 '''
 minedge = getBar("Min Edges", "Edges n Lines")
@@ -104,8 +114,8 @@ con = getBar("con", "Edges n Lines")
 '''
 image = cv2.imread('chessboard/Boards/3.jpg')
 image = cv2.resize(image, (int(image.shape[1]*0.2), int(image.shape[0]*0.2)))
+original = image.copy()
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
 #_, thres = cv2.threshold(gray,127,255,cv2.THRESH_BINARY)
 
 edges = cv2.Canny(gray,100,300)
@@ -116,26 +126,24 @@ edges = cv2.Canny(gray,100,300)
 
 houghs = cv2.HoughLines(edges,1,np.pi/180,80)
 
-data = []
+lines = []
 
 if houghs is not None:
     for hough in houghs:
         rho, theta = hough[0]
         a = np.cos(theta)
         b = np.sin(theta)
+        
         x0 = a*rho
         y0 = b*rho
+
         x1 = int(x0 + 1000*(-b))
         y1 = int(y0 + 1000*(a))
         x2 = int(x0 - 1000*(-b))
         y2 = int(y0 - 1000*(a))
         
-        degree = int(theta*180/np.pi)
-        data.append([degree,rho])
-        #if theta*180/np.pi > 90:
-        #cv2.line(image,(x1,y1),(x2,y2),(0,255,0),1)
-        degrees.append(degree)
-        lines.append([x1,y1,x2,y2])
+        theta = int(theta*180/np.pi)
+        lines.append([x1,y1,x2,y2,rho,theta])
 
     #image = draw_line(image, clean_line(lines, degree, 2))
     '''
@@ -152,28 +160,39 @@ if houghs is not None:
 #cv2.imshow('edges', edges)
 #cv2.imshow('image', image)
 
+data = find_anomalies(np.array(lines))
+data = clean_line(data,3)
+
+image = draw_line(image, data)
+
+intersections = []
+
+for i in range(len(data)):
+    for p in range(len(data)):
+        l1 = data[i]
+        l2 = data[p]
+        tmp = find_intersection(l1,l2)
+        if tmp[0] != False: 
+            intersections.append(tmp)
 
 
-#data = clean_line(lines,degrees,2)
-#data = normalize(data, norm='l2', axis=0)
-#tes = find_anomalies(np.array(data)[:,0])
-#print(tes)
-#image = draw_line(image, data)
+image = draw_circle(image, intersections)
 
-
-
-#kmeans = KMeans(n_clusters=2, random_state=0).fit(data)
-#print(len(kmeans.labels_))
+pts1 = np.float32([[105,275],[445,253],[83,641],[570,582]])
+pts2 = np.float32([[0,0],[300,0],[0,300],[300,300]])
+M = cv2.getPerspectiveTransform(pts1,pts2)
+dst = cv2.warpPerspective(original,M,(300,300))
 
 plt.figure(1)
-plt.scatter(np.arange(0,len(degrees)), np.array(lines)[:,0])
+plt.imshow(cv2.cvtColor(dst, cv2.COLOR_BGR2RGB))
+#plt.scatter(intersections[:][0], intersections[:][1])
 plt.figure(2)
 plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 plt.show()
 
 '''
+cv2.imshow("image",image)
+cv2.waitKey()
 if cv2.waitKey(22) & 0xFF == ord('q'):
-    print(sorted(degree))
-
     cv2.destroyAllWindows()
 '''
